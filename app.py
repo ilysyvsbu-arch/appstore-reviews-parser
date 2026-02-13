@@ -1,23 +1,55 @@
 import streamlit as st
 import requests
-import csv
 import re
 import time
-
-st.title("📱 App Store Reviews Parser")
+from openpyxl import Workbook
+from io import BytesIO
 
 # ==============================
-# Функция извлечения app_id
+# Настройка страницы
+# ==============================
+st.set_page_config(
+    page_title="App Store Reviews Parser",
+    page_icon="📱",
+    layout="wide"
+)
+
+# ==============================
+# Кастомный CSS (красивый UI)
+# ==============================
+st.markdown("""
+<style>
+.big-title {
+    font-size:40px !important;
+    font-weight:700;
+}
+.card {
+    padding:20px;
+    border-radius:15px;
+    background-color:#f5f7fa;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="big-title">📱 App Store Reviews Parser</p>', unsafe_allow_html=True)
+st.write("Собирает отзывы из App Store и сохраняет в Excel.")
+
+# ==============================
+# Функция извлечения ID
 # ==============================
 def extract_app_id(url):
     match = re.search(r'id(\d+)', url)
     if match:
         return match.group(1)
-    else:
-        return None
+    return None
 
 # ==============================
-# Получение отзывов для одной страны
+# Список стран (можно расширять)
+# ==============================
+COUNTRIES = ["us", "gb", "de", "fr", "it", "es", "ca", "au"]
+
+# ==============================
+# Сбор отзывов
 # ==============================
 def fetch_reviews(app_id, country):
     reviews = []
@@ -27,11 +59,11 @@ def fetch_reviews(app_id, country):
         url = f"https://itunes.apple.com/{country}/rss/customerreviews/page={page}/id={app_id}/sortby=mostrecent/json"
         
         try:
-            response = requests.get(url)
-            if response.status_code != 200:
+            r = requests.get(url)
+            if r.status_code != 200:
                 break
 
-            data = response.json()
+            data = r.json()
 
             if "feed" not in data or "entry" not in data["feed"]:
                 break
@@ -39,17 +71,18 @@ def fetch_reviews(app_id, country):
             entries = data["feed"]["entry"][1:]
 
             for entry in entries:
-                reviews.append({
-                    "country": country,
-                    "user": entry["author"]["name"]["label"],
-                    "rating": entry["im:rating"]["label"],
-                    "title": entry["title"]["label"],
-                    "text": entry["content"]["label"],
-                    "version": entry["im:version"]["label"]
-                })
+                reviews.append([
+                    country,
+                    entry["author"]["name"]["label"],
+                    entry["updated"]["label"],
+                    entry["im:rating"]["label"],
+                    entry["title"]["label"],
+                    entry["content"]["label"],
+                    entry["im:version"]["label"]
+                ])
 
             page += 1
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         except:
             break
@@ -59,33 +92,62 @@ def fetch_reviews(app_id, country):
 # ==============================
 # Интерфейс
 # ==============================
-app_url = st.text_input("Введите ссылку на App Store")
+col1, col2 = st.columns([3,1])
 
-if st.button("Собрать отзывы"):
+with col1:
+    app_url = st.text_input("🔗 Вставьте ссылку на App Store")
+
+with col2:
+    selected_country = st.selectbox("🌍 Страна", COUNTRIES)
+
+if st.button("🚀 Запустить сбор отзывов"):
+
     app_id = extract_app_id(app_url)
 
     if not app_id:
-        st.error("Неверная ссылка")
+        st.error("❌ Неверная ссылка")
     else:
-        st.write("Сбор отзывов...")
+        progress = st.progress(0)
+        status = st.empty()
 
-        all_reviews = fetch_reviews(app_id, "us")
+        status.text("Сбор отзывов...")
+        reviews = fetch_reviews(app_id, selected_country)
+        progress.progress(100)
 
-        if not all_reviews:
+        if not reviews:
             st.warning("Отзывы не найдены")
         else:
-            csv_file = "reviews.csv"
-            with open(csv_file, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=all_reviews[0].keys())
-                writer.writeheader()
-                writer.writerows(all_reviews)
+            # ==============================
+            # Создание Excel в памяти
+            # ==============================
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Reviews"
 
-            with open(csv_file, "rb") as f:
-                st.download_button(
-                    label="📥 Скачать CSV",
-                    data=f,
-                    file_name="appstore_reviews.csv",
-                    mime="text/csv"
-                )
+            headers = [
+                "Country",
+                "User Name",
+                "Review Date",
+                "Rating",
+                "Title",
+                "Review Text",
+                "App Version"
+            ]
 
-            st.success(f"Собрано отзывов: {len(all_reviews)}")
+            ws.append(headers)
+
+            for row in reviews:
+                ws.append(row)
+
+            file_buffer = BytesIO()
+            wb.save(file_buffer)
+            file_buffer.seek(0)
+
+            st.success(f"✅ Собрано отзывов: {len(reviews)}")
+
+            st.download_button(
+                label="📥 Скачать Excel",
+                data=file_buffer,
+                file_name="appstore_reviews.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
